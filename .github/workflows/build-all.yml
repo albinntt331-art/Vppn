@@ -1,0 +1,121 @@
+name: Build Albin-vpn (APK + EXE + Release)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Download libv2ray.aar & geoip/geosite assets
+        working-directory: android
+        run: |
+          mkdir -p app/libs app/src/main/assets
+          curl -sSL https://api.github.com/repos/2dust/AndroidLibXrayLite/releases/latest \
+            | grep -oE 'https://[^"]+libv2ray\.aar' | head -n 1 \
+            | xargs -r curl -L -o app/libs/libv2ray.aar
+          curl -sSL https://api.github.com/repos/XTLS/Xray-core/releases/latest \
+            | grep -oE 'https://[^"]+Xray-android-arm64-v8a\.zip' | head -n 1 \
+            | xargs -r curl -L -o /tmp/xray_assets.zip
+          unzip -o -j /tmp/xray_assets.zip geoip.dat geosite.dat -d app/src/main/assets/ || true
+          rm -f /tmp/xray_assets.zip
+          ls -lh app/libs/ app/src/main/assets/
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build Debug & Release APK
+        working-directory: android
+        run: |
+          gradle assembleDebug
+          gradle assembleRelease
+          mkdir -p dist_apks
+          cp app/build/outputs/apk/debug/*.apk dist_apks/Albin-vpn-debug.apk || true
+          cp app/build/outputs/apk/release/*.apk dist_apks/Albin-vpn-release.apk || true
+          ls -lh dist_apks/
+
+      - name: Upload Albin-vpn APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Albin-vpn-APK
+          path: android/dist_apks/*.apk
+
+  build-windows-exe:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        working-directory: windows
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download Xray-core (with wintun.dll) & sing-box
+        working-directory: windows
+        shell: pwsh
+        run: ./download_cores.ps1
+
+      - name: Build Albin-vpn.exe
+        working-directory: windows
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "Albin-vpn" --icon "albin.ico" --add-data "albin_icon.png;." --add-data "cores;cores" main.py
+
+      - name: Upload Albin-vpn EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Albin-vpn-Windows-EXE
+          path: windows/dist/Albin-vpn.exe
+
+  publish-release:
+    name: Publish to GitHub Releases
+    needs: [ build-android-apk, build-windows-exe ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Android APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: Albin-vpn-APK
+          path: release_files
+
+      - name: Download Windows EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: Albin-vpn-Windows-EXE
+          path: release_files
+
+      - name: Publish Release (direct APK & EXE downloads)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh release_files/
+          gh release delete latest --repo ${{ github.repository }} --yes || true
+          gh release create latest release_files/* \
+            --repo ${{ github.repository }} \
+            --target main \
+            --title "Albin-vpn v2 (APK + EXE)" \
+            --notes "Albin-vpn v2: рабочий Xray native TUN, сервер Авто + приоритеты, режимы TUN / Proxy Apps, выбор программ, языки RU/EN и дизайн Google Pixel."

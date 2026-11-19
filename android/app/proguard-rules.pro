@@ -1,0 +1,3 @@
+-keep class libv2ray.** { *; }
+-keep class io.nekohasekai.libbox.** { *; }
+-keepattributes *Annotation*, Signature
